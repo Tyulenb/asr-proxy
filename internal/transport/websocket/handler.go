@@ -1,10 +1,11 @@
-package websocket
+package websocketHandler
 
 import (
 	"context"
 	"log/slog"
 	"net/http"
 
+	"github.com/Tyulenb/asr-proxy/internal/model"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -13,17 +14,17 @@ const (
 )
 
 type service interface {
-	ProcessAudioChunk(context.Context, chan<- []byte, <-chan []byte) error
+	ProcessAudioChunk(context.Context, model.AudioConfig, chan<- []byte, <-chan []byte) error
+}
+
+type session interface {
+	ReadStart(context.Context) (model.AudioConfig, error)
+	Run(ctx context.Context, writer <-chan []byte, reader chan<- []byte) error
+	Close()
 }
 
 type websocket interface {
-	// Connection will read data from client into reader chan.
-	// And will write data to client from writer chan.
-	CreateConnection(
-		ctx context.Context,
-		w http.ResponseWriter, r *http.Request,
-		writer <-chan []byte, reader chan<- []byte,
-	) error
+	CreateSession(w http.ResponseWriter, r *http.Request) (session, error)
 }
 
 type WebsocketHandler struct {
@@ -44,12 +45,24 @@ func (wh *WebsocketHandler) RegisterRoutes(router *http.ServeMux) {
 }
 
 func (wh *WebsocketHandler) audioChunks(w http.ResponseWriter, r *http.Request) {
+	sess, err := wh.ws.CreateSession(w, r)
+	if err != nil {
+		return
+	}
+	defer sess.Close()
+
+	audioCfg, err := sess.ReadStart(r.Context())
+	if err != nil {
+		wh.logger.Error("Error during receiving audio config", "err", err)
+		return
+	}
+
 	writer := make(chan []byte, chanBufferSize)
 	reader := make(chan []byte, chanBufferSize)
 
 	group, groupCtx := errgroup.WithContext(r.Context())
 	group.Go(func() error {
-		err := wh.ws.CreateConnection(groupCtx, w, r, writer, reader)
+		err := sess.Run(groupCtx, writer, reader)
 		if err != nil {
 			wh.logger.Error("Error during upgrading websocket", "err", err)
 			return err
@@ -57,20 +70,12 @@ func (wh *WebsocketHandler) audioChunks(w http.ResponseWriter, r *http.Request) 
 		return nil
 	})
 	group.Go(func() error {
-		err := wh.srv.ProcessAudioChunk(groupCtx, reader, writer)
+		err := wh.srv.ProcessAudioChunk(groupCtx, audioCfg, reader, writer)
 		if err != nil {
 			wh.logger.Error("Error during processing audio", "err", err)
 			return err
 		}
 		return nil
 	})
-	err := group.Wait()
-	if err != nil {
-		writeErrorResponse(w)
-	}
-}
-
-func writeErrorResponse(w http.ResponseWriter) {
-	w.WriteHeader(http.StatusInternalServerError)
-	w.Write([]byte("Something went wrong"))
+	_ = group.Wait()
 }

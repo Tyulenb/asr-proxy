@@ -1,85 +1,34 @@
 package infrawebsocket
 
 import (
-	"context"
-	"errors"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
-	"golang.org/x/sync/errgroup"
 )
 
 const (
+	ReadLimit       = 3200
 	ReadBufferSize  = 4096
 	WriteBufferSize = 4096
+	startWait       = 15 * time.Second
+	pongWait        = 60 * time.Second
+	pingPeriod      = pongWait * 9 / 10
+	writeWait       = 10 * time.Second
 )
 
-var (
-	wrongMessageType = errors.New("Websocket message type is not binary.")
-)
+type Upgrader struct{}
 
-type InfraWebsocket struct{}
-
-func (iws *InfraWebsocket) CreateConnection(
-	ctx context.Context,
-	w http.ResponseWriter, r *http.Request,
-	writer <-chan []byte, reader chan<- []byte,
-) error {
+func (u *Upgrader) CreateConnection(w http.ResponseWriter, r *http.Request) (*session, error) {
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  ReadBufferSize,
 		WriteBufferSize: WriteBufferSize,
 	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer conn.Close()
-	errGroup, errCtx := errgroup.WithContext(ctx)
-
-	errGroup.Go(func() error {
-		err := receiveMessages(errCtx, conn, reader)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	errGroup.Go(func() error {
-		err := sendMessages(errCtx, conn, writer)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	return errGroup.Wait()
-}
-
-func receiveMessages(ctx context.Context, conn *websocket.Conn, reader chan<- []byte) error {
-	for {
-		mt, msg, err := conn.ReadMessage()
-		if err != nil {
-			return err
-		}
-		if mt != websocket.BinaryMessage {
-			return wrongMessageType
-		}
-		reader <- msg
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-}
-
-func sendMessages(ctx context.Context, conn *websocket.Conn, writer <-chan []byte) error {
-	for {
-		select {
-		case msg := <-writer:
-			err := conn.WriteMessage(websocket.TextMessage, msg)
-			if err != nil {
-				return err
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
+	conn.SetReadLimit(ReadLimit)
+	sess := session{conn: conn}
+	return &sess, nil
 }
