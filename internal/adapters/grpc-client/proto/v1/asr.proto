@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package asr.v1;
+
+option go_package = "github.com/Tyulenb/grpc-client/asr/v1;asrv1";
+
+service ASRService {
+    rpc RecognizeStream (stream RecognizeStreamRequest) returns (stream RecognizeStreamResponse);
+}
+
+message RecognizeStreamRequest {
+    oneof data {
+        AudioConfig config = 1;
+        bytes chunk = 2;
+    }
+}
+
+message AudioConfig {
+    enum AudioEncoding {
+        AUDIO_ENCODING_UNSPECIFIED = 0;
+        AUDIO_ENCODING_PCM_16BIT = 1;
+        AUDIO_ENCODING_OPUS = 2;
+        AUDIO_ENCODING_MP3 = 3;
+        AUDIO_ENCODING_FLAC = 4;
+    }
+
+    AudioEncoding encoding = 1;
+    int32 sample_rate = 2;
+}
+
+message RecognizeStreamResponse{
+    string text = 1;
+}
