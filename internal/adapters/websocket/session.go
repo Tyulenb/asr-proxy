@@ -22,10 +22,11 @@ type session struct {
 	conn *websocket.Conn
 }
 
-func (s *session) Close() {
+func (s *session) Close() error {
 	if s.conn != nil {
-		s.conn.Close()
+		return s.conn.Close()
 	}
+	return nil
 }
 
 func (s *session) ReadStart(ctx context.Context) (model.AudioConfig, error) {
@@ -76,10 +77,10 @@ func (s *session) ReadStart(ctx context.Context) (model.AudioConfig, error) {
 		SampleRate: txtMsg.SampleRate,
 		Channels:   txtMsg.Channels,
 	}
-	if audioCfg.SampleRate < 0 {
+	if audioCfg.SampleRate <= 0 {
 		return model.AudioConfig{}, invalidAudioConfig
 	}
-	if audioCfg.Channels < 0 {
+	if audioCfg.Channels <= 0 {
 		return model.AudioConfig{}, invalidAudioConfig
 	}
 	return audioCfg, nil

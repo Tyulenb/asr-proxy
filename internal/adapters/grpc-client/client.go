@@ -6,15 +6,75 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync/atomic"
 
 	pb "github.com/Tyulenb/asr-proxy/internal/adapters/grpc-client/proto/v1"
 	"github.com/Tyulenb/asr-proxy/internal/model"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 )
 
 type GrpcClient struct {
 	conn   *grpc.ClientConn
 	logger *slog.Logger
+}
+
+func NewGrpcClient(conn *grpc.ClientConn, logger *slog.Logger) *GrpcClient {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &GrpcClient{
+		conn:   conn,
+		logger: logger,
+	}
+}
+
+func (g *GrpcClient) Run(ctx context.Context, audioConfig model.AudioConfig, audio <-chan []byte, text chan<- []byte) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stream, err := pb.NewASRServiceClient(g.conn).RecognizeStream(runCtx)
+	if err != nil {
+		return fmt.Errorf("open stream %w", err)
+	}
+	defer stream.CloseSend()
+	err = g.sendConfig(stream, audioConfig)
+	if err != nil {
+		return fmt.Errorf("send config %w", err)
+	}
+
+	errGroup, errCtx := errgroup.WithContext(runCtx)
+	var normalCompletion atomic.Bool
+	errGroup.Go(func() error {
+		defer cancel()
+		defer close(text)
+		err := g.receiveResponses(errCtx, stream, text)
+		if err == nil {
+			normalCompletion.Store(true)
+		}
+		return err
+	})
+	errGroup.Go(func() error {
+		defer cancel()
+		err := g.sendAudio(errCtx, stream, audio)
+		if err == nil {
+			normalCompletion.Store(true)
+		}
+		return err
+	})
+
+	err = errGroup.Wait()
+	if normalCompletion.Load() {
+		return nil
+	}
+	return err
+}
+
+func (g *GrpcClient) Close() error {
+	if g.conn != nil {
+		return g.conn.Close()
+	}
+	return nil
 }
 
 func (g *GrpcClient) sendConfig(stream pb.ASRService_RecognizeStreamClient, audioCfg model.AudioConfig) error {
@@ -51,8 +111,7 @@ func (g *GrpcClient) sendAudio(ctx context.Context, stream pb.ASRService_Recogni
 		select {
 		case chunk, ok := <-audioChan:
 			if !ok {
-				err := stream.CloseSend()
-				return err
+				return nil
 			}
 			err := stream.Send(&pb.RecognizeStreamRequest{
 				Data: &pb.RecognizeStreamRequest_Chunk{Chunk: chunk},
@@ -81,6 +140,6 @@ func (g *GrpcClient) receiveResponses(ctx context.Context, stream pb.ASRService_
 		case text <- []byte(response.GetText()):
 		}
 
-		g.logger.Debug("Received tezt", "text", response.GetText())
+		g.logger.Debug("Received text", "text", response.GetText())
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Tyulenb/asr-proxy/internal/service"
 	"github.com/gorilla/websocket"
 )
 
@@ -19,7 +20,7 @@ const (
 
 type Upgrader struct{}
 
-func (u *Upgrader) CreateConnection(w http.ResponseWriter, r *http.Request) (*session, error) {
+func (u *Upgrader) CreateSession(w http.ResponseWriter, r *http.Request) (service.Session, error) {
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  ReadBufferSize,
 		WriteBufferSize: WriteBufferSize,
