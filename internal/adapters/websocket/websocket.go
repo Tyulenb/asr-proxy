@@ -1,4 +1,4 @@
-package infrawebsocket
+package adapterwebsocket
 
 import (
 	"net/http"

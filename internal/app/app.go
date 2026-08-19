@@ -2,13 +2,12 @@ package app
 
 import (
 	"log/slog"
-	"net/http"
 	"os"
-	"time"
 
 	grpcclient "github.com/Tyulenb/asr-proxy/internal/adapters/grpc-client"
-	infrawebsocket "github.com/Tyulenb/asr-proxy/internal/adapters/websocket"
+	adapterwebsocket "github.com/Tyulenb/asr-proxy/internal/adapters/websocket"
 	"github.com/Tyulenb/asr-proxy/internal/config"
+	infrahttp "github.com/Tyulenb/asr-proxy/internal/infra/http"
 	"github.com/Tyulenb/asr-proxy/internal/service"
 	websocketHandler "github.com/Tyulenb/asr-proxy/internal/transport/websocket"
 	"google.golang.org/grpc"
@@ -26,25 +25,22 @@ func NewApp(cfg *config.Config) *App {
 }
 
 func (a *App) Run() error {
-	conn, err := grpc.NewClient(a.cfg.ListenAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(a.cfg.ASRAdress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return err
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	gRPC := grpcclient.NewGrpcClient(conn, logger)
-	ws := &infrawebsocket.Upgrader{}
+	ws := &adapterwebsocket.Upgrader{}
 	srvc := service.NewProxyService(logger, gRPC)
 	handler := websocketHandler.NewWebsocketHandler(ws, srvc)
 
-	router := http.NewServeMux()
-	handler.RegisterRoutes(router)
+	logger.Info("Server is running", "address", a.cfg.ListenAddress)
 
-	// TO DO: move to infrastructure layer
-	// And add gracefull shutdown.
-	server := http.Server{
-		Addr:        ":9999",
-		Handler:     router,
-		ReadTimeout: time.Second * 10,
+	err = infrahttp.ServerRun(a.cfg, handler)
+	if err != nil {
+		logger.Error("Error during server work", "err", err)
+		return err
 	}
-	return server.ListenAndServe()
+	return nil
 }
